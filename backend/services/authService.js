@@ -183,13 +183,17 @@ class AuthService {
     return { message: 'Password changed successfully' };
   }
   
-  async resetPassword(phone, newPassword) {
+  async resetPassword(phone, newPassword, verificationCode) {
     const normalizedPhone = normalizePhone(phone);
     
     const user = await User.findOne({ phone: normalizedPhone, isActive: true });
     
     if (!user) {
       throw new Error('User not found');
+    }
+    
+    if (!verificationCode) {
+      throw new Error('Verification code is required for password reset');
     }
     
     user.password = newPassword;

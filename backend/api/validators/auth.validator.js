@@ -32,7 +32,7 @@ const loginWithPhoneValidator = [
     .matches(/^\+998[0-9]{9}$/).withMessage('Invalid phone number format'),
   body('password')
     .notEmpty().withMessage('Password is required')
-    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters')
+    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
 ];
 
 const refreshTokenValidator = [
@@ -50,10 +50,10 @@ const verifyTokenValidator = [
 const changePasswordValidator = [
   body('oldPassword')
     .notEmpty().withMessage('Old password is required')
-    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
   body('newPassword')
     .notEmpty().withMessage('New password is required')
-    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters')
+    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
     .custom((value, { req }) => {
       if (value === req.body.oldPassword) {
         throw new Error('New password must be different from old password');
@@ -68,7 +68,10 @@ const resetPasswordValidator = [
     .matches(/^\+998[0-9]{9}$/).withMessage('Invalid phone number format'),
   body('newPassword')
     .notEmpty().withMessage('New password is required')
-    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters')
+    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+  body('verificationCode')
+    .notEmpty().withMessage('Verification code is required')
+    .isString().withMessage('Verification code must be a string')
 ];
 
 module.exports = {

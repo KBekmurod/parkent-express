@@ -74,9 +74,9 @@ const changePassword = asyncHandler(async (req, res) => {
 });
 
 const resetPassword = asyncHandler(async (req, res) => {
-  const { phone, newPassword } = req.body;
+  const { phone, newPassword, verificationCode } = req.body;
   
-  const result = await authService.resetPassword(phone, newPassword);
+  const result = await authService.resetPassword(phone, newPassword, verificationCode);
   
   res.status(HTTP_STATUS.OK).json({
     success: true,
