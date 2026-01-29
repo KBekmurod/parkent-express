@@ -1,0 +1,35 @@
+{
+  "name": "parkent-express-backend",
+  "version": "1.0.0",
+  "description": "Parkent Express Delivery System - Backend & Bot",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "keywords": ["telegram", "delivery", "express", "bot"],
+  "author": "Parkent Express",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-telegram-bot-api": "^0.66.0",
+    "mongoose": "^8.0.0",
+    "socket.io": "^4.6.1",
+    "joi": "^17.11.0",
+    "jsonwebtoken": "^9.0.2",
+    "bcrypt": "^5.1.1",
+    "dotenv": "^16.3.1",
+    "winston": "^3.11.0",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "express-rate-limit": "^7.1.5",
+    "node-cron": "^3.0.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
