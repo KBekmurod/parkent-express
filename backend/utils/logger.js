@@ -135,16 +135,20 @@ const errorLogger = (err, req, res, next) => {
   next(err);
 };
 
-const unhandledRejectionHandler = () => {
+let handlersRegistered = false;
+
+const registerGlobalHandlers = () => {
+  if (handlersRegistered) {
+    return;
+  }
+
   process.on('unhandledRejection', (reason, promise) => {
     logger.error('Unhandled Rejection', {
       reason: reason,
       promise: promise
     });
   });
-};
 
-const uncaughtExceptionHandler = () => {
   process.on('uncaughtException', (error) => {
     logger.error('Uncaught Exception', {
       error: error.message,
@@ -153,10 +157,13 @@ const uncaughtExceptionHandler = () => {
     
     process.exit(1);
   });
+
+  handlersRegistered = true;
 };
 
-unhandledRejectionHandler();
-uncaughtExceptionHandler();
+if (environment !== 'test') {
+  registerGlobalHandlers();
+}
 
 module.exports = logger;
 module.exports.requestLogger = requestLogger;

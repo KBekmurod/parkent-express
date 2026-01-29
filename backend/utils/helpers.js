@@ -185,7 +185,7 @@ const sanitizeObject = (obj, allowedFields) => {
   const sanitized = {};
   
   for (const field of allowedFields) {
-    if (obj.hasOwnProperty(field)) {
+    if (Object.prototype.hasOwnProperty.call(obj, field)) {
       sanitized[field] = obj[field];
     }
   }
@@ -286,7 +286,7 @@ const groupBy = (array, key) => {
 };
 
 const sortBy = (array, key, order = 'asc') => {
-  return array.sort((a, b) => {
+  return [...array].sort((a, b) => {
     const aValue = a[key];
     const bValue = b[key];
     
