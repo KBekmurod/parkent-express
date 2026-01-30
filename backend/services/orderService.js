@@ -2,97 +2,143 @@ const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Vendor = require('../models/Vendor');
 const User = require('../models/User');
+const mongoose = require('mongoose');
 const { paginate, buildPaginationResponse, calculateDistance, calculateDeliveryFee, calculateETA } = require('../utils/helpers');
 const { ORDER_STATUS } = require('../utils/constants');
 const notificationService = require('./notificationService');
 
 class OrderService {
   async createOrder(customerId, orderData) {
-    const { vendorId, items, deliveryAddress, paymentMethod, notes } = orderData;
+    const session = await mongoose.startSession();
+    session.startTransaction();
     
-    const vendor = await Vendor.findById(vendorId);
-    if (!vendor || !vendor.isActive) {
-      throw new Error('Vendor not found or inactive');
-    }
-    
-    const canAccept = vendor.canAcceptOrder(0);
-    if (!canAccept.canAccept) {
-      throw new Error(canAccept.reason);
-    }
-    
-    const orderItems = [];
-    let subtotal = 0;
-    
-    for (const item of items) {
-      const product = await Product.findById(item.productId);
+    try {
+      const { vendorId, items, deliveryAddress, paymentMethod, notes } = orderData;
       
-      if (!product || !product.isAvailable) {
-        throw new Error(`Product ${item.productId} not available`);
+      // 1. Check for existing active orders (with lock)
+      const existingOrder = await Order.findOne({
+        customer: customerId,
+        status: { 
+          $in: [ORDER_STATUS.PENDING, ORDER_STATUS.CONFIRMED, ORDER_STATUS.PREPARING, ORDER_STATUS.READY, ORDER_STATUS.ASSIGNED, ORDER_STATUS.PICKED_UP, ORDER_STATUS.IN_TRANSIT] 
+        }
+      }).session(session);
+
+      if (existingOrder) {
+        await session.abortTransaction();
+        throw new Error('ACTIVE_ORDER_EXISTS');
       }
       
-      const availability = product.checkAvailability(item.quantity);
-      if (!availability.available) {
-        throw new Error(`${product.name}: ${availability.reason}`);
+      const vendor = await Vendor.findById(vendorId).session(session);
+      if (!vendor || !vendor.isActive) {
+        await session.abortTransaction();
+        throw new Error('Vendor not found or inactive');
       }
       
-      const itemSubtotal = product.price * item.quantity;
+      const canAccept = vendor.canAcceptOrder(0);
+      if (!canAccept.canAccept) {
+        await session.abortTransaction();
+        throw new Error(canAccept.reason);
+      }
       
-      orderItems.push({
-        product: product._id,
-        name: product.name,
-        price: product.price,
-        quantity: item.quantity,
-        subtotal: itemSubtotal,
-        notes: item.notes || ''
+      const orderItems = [];
+      let subtotal = 0;
+      
+      for (const item of items) {
+        const product = await Product.findById(item.productId).session(session);
+        
+        if (!product || !product.isAvailable) {
+          await session.abortTransaction();
+          throw new Error(`Product ${item.productId} not available`);
+        }
+        
+        const availability = product.checkAvailability(item.quantity);
+        if (!availability.available) {
+          await session.abortTransaction();
+          throw new Error(`${product.name}: ${availability.reason}`);
+        }
+        
+        const itemSubtotal = product.price * item.quantity;
+        
+        orderItems.push({
+          product: product._id,
+          name: product.name,
+          price: product.price,
+          quantity: item.quantity,
+          subtotal: itemSubtotal,
+          notes: item.notes || ''
+        });
+        
+        subtotal += itemSubtotal;
+        
+        await product.decreaseStock(item.quantity);
+        await product.save({ session });
+      }
+      
+      const distance = calculateDistance(
+        vendor.address.location.coordinates[1],
+        vendor.address.location.coordinates[0],
+        deliveryAddress.location.coordinates[1],
+        deliveryAddress.location.coordinates[0]
+      );
+      
+      const deliveryFee = calculateDeliveryFee(distance, vendor.settings.deliveryFee);
+      const serviceFee = Math.round(subtotal * 0.05);
+      const total = subtotal + deliveryFee + serviceFee;
+      
+      const preparationTime = vendor.settings.preparationTime || 30;
+      const estimatedDeliveryTime = new Date(Date.now() + calculateETA(distance, preparationTime) * 60000);
+      
+      // 2. Create order atomically
+      const orderDoc = new Order({
+        customer: customerId,
+        vendor: vendorId,
+        status: ORDER_STATUS.PENDING,
+        items: orderItems,
+        pricing: {
+          subtotal,
+          deliveryFee,
+          serviceFee,
+          discount: 0,
+          total
+        },
+        deliveryAddress,
+        paymentMethod,
+        notes: {
+          customer: notes || ''
+        },
+        estimatedDeliveryTime,
+        preparationTime
       });
       
-      subtotal += itemSubtotal;
+      await orderDoc.save({ session });
       
-      await product.decreaseStock(item.quantity);
+      // 3. Update customer order count
+      await User.findOneAndUpdate(
+        { _id: customerId },
+        { 
+          $inc: { totalOrders: 1 },
+          $set: { lastOrderAt: new Date() }
+        },
+        { session, upsert: true }
+      );
+      
+      // 4. Commit transaction
+      await session.commitTransaction();
+      console.log('✅ Order created successfully with transaction');
+      
+      await orderDoc.populate(['customer', 'vendor', 'items.product']);
+      
+      await notificationService.notifyNewOrder(orderDoc);
+      
+      return orderDoc;
+    } catch (error) {
+      // Rollback on any error
+      await session.abortTransaction();
+      console.error('❌ Order creation failed, transaction rolled back:', error.message);
+      throw error;
+    } finally {
+      session.endSession();
     }
-    
-    const distance = calculateDistance(
-      vendor.address.location.coordinates[1],
-      vendor.address.location.coordinates[0],
-      deliveryAddress.location.coordinates[1],
-      deliveryAddress.location.coordinates[0]
-    );
-    
-    const deliveryFee = calculateDeliveryFee(distance, vendor.settings.deliveryFee);
-    const serviceFee = Math.round(subtotal * 0.05);
-    const total = subtotal + deliveryFee + serviceFee;
-    
-    const preparationTime = vendor.settings.preparationTime || 30;
-    const estimatedDeliveryTime = new Date(Date.now() + calculateETA(distance, preparationTime) * 60000);
-    
-    const order = new Order({
-      customer: customerId,
-      vendor: vendorId,
-      status: ORDER_STATUS.PENDING,
-      items: orderItems,
-      pricing: {
-        subtotal,
-        deliveryFee,
-        serviceFee,
-        discount: 0,
-        total
-      },
-      deliveryAddress,
-      paymentMethod,
-      notes: {
-        customer: notes || ''
-      },
-      estimatedDeliveryTime,
-      preparationTime
-    });
-    
-    await order.save();
-    
-    await order.populate(['customer', 'vendor', 'items.product']);
-    
-    await notificationService.notifyNewOrder(order);
-    
-    return order;
   }
   
   async getOrderById(orderId, userId, userRole) {
@@ -121,46 +167,94 @@ class OrderService {
   }
   
   async updateOrderStatus(orderId, newStatus, actorId, note = '') {
-    const order = await Order.findById(orderId)
-      .populate('customer')
-      .populate('vendor')
-      .populate('courier');
+    const session = await mongoose.startSession();
+    session.startTransaction();
     
-    if (!order) {
-      throw new Error('Order not found');
-    }
-    
-    if (!order.canTransitionTo(newStatus)) {
-      throw new Error(`Cannot transition from ${order.status} to ${newStatus}`);
-    }
-    
-    order.status = newStatus;
-    order.modifiedBy = actorId;
-    
-    if (note) {
-      order.timeline[order.timeline.length - 1].note = note;
-    }
-    
-    if (newStatus === ORDER_STATUS.DELIVERED) {
-      order.actualDeliveryTime = new Date();
-    }
-    
-    if (newStatus === ORDER_STATUS.CANCELLED) {
-      order.cancelledBy = actorId;
+    try {
+      const order = await Order.findById(orderId)
+        .populate('customer')
+        .populate('vendor')
+        .populate('courier')
+        .session(session);
       
-      for (const item of order.items) {
-        const product = await Product.findById(item.product);
-        if (product) {
-          await product.increaseStock(item.quantity);
+      if (!order) {
+        await session.abortTransaction();
+        throw new Error('Order not found');
+      }
+      
+      if (!order.canTransitionTo(newStatus)) {
+        await session.abortTransaction();
+        throw new Error(`Cannot transition from ${order.status} to ${newStatus}`);
+      }
+      
+      order.status = newStatus;
+      order.modifiedBy = actorId;
+      
+      if (note) {
+        order.timeline[order.timeline.length - 1].note = note;
+      }
+      
+      if (newStatus === ORDER_STATUS.DELIVERED) {
+        order.actualDeliveryTime = new Date();
+        
+        // Update courier statistics atomically
+        if (order.courier) {
+          const courier = await User.findById(order.courier._id).session(session);
+          
+          if (courier) {
+            courier.resetDailyStats();
+            await User.findByIdAndUpdate(
+              courier._id,
+              {
+                $inc: {
+                  totalDeliveries: 1,
+                  todayDeliveries: 1,
+                  activeOrders: -1
+                },
+                lastDeliveryReset: courier.lastDeliveryReset
+              },
+              { session }
+            );
+          }
         }
       }
+      
+      if (newStatus === ORDER_STATUS.CANCELLED) {
+        order.cancelledBy = actorId;
+        
+        for (const item of order.items) {
+          const product = await Product.findById(item.product).session(session);
+          if (product) {
+            await product.increaseStock(item.quantity);
+            await product.save({ session });
+          }
+        }
+        
+        // If courier assigned, decrement their active orders
+        if (order.courier) {
+          await User.findByIdAndUpdate(
+            order.courier._id,
+            { $inc: { activeOrders: -1 } },
+            { session }
+          );
+        }
+      }
+      
+      await order.save({ session });
+      
+      await session.commitTransaction();
+      console.log(`✅ Order ${orderId} status updated to ${newStatus}`);
+      
+      await notificationService.notifyOrderStatusChange(order);
+      
+      return order;
+    } catch (error) {
+      await session.abortTransaction();
+      console.error('❌ Status update failed, transaction rolled back:', error.message);
+      throw error;
+    } finally {
+      session.endSession();
     }
-    
-    await order.save();
-    
-    await notificationService.notifyOrderStatusChange(order);
-    
-    return order;
   }
   
   async confirmOrder(orderId, vendorId) {
@@ -195,27 +289,56 @@ class OrderService {
   }
   
   async assignCourier(orderId, courierId) {
-    const order = await Order.findById(orderId);
+    const session = await mongoose.startSession();
+    session.startTransaction();
     
-    if (!order) {
-      throw new Error('Order not found');
+    try {
+      // 1. Try to assign courier (atomic operation)
+      const order = await Order.findOneAndUpdate(
+        { 
+          _id: orderId, 
+          status: ORDER_STATUS.READY // Only assign if still ready
+        },
+        { 
+          courier: courierId
+        },
+        { new: true, session }
+      );
+
+      if (!order) {
+        await session.abortTransaction();
+        throw new Error('ORDER_NOT_AVAILABLE');
+      }
+
+      // 2. Update courier statistics
+      await User.findOneAndUpdate(
+        { _id: courierId, role: 'courier' },
+        { 
+          $inc: { activeOrders: 1 }
+        },
+        { session }
+      );
+      
+      const Courier = require('../models/Courier');
+      const courier = await Courier.findOne({ user: courierId }).session(session);
+      
+      if (courier) {
+        await courier.assignOrder(orderId);
+        await courier.save({ session });
+      }
+      
+      // 3. Commit transaction
+      await session.commitTransaction();
+      console.log(`✅ Order ${orderId} assigned to courier ${courierId}`);
+      
+      return await this.updateOrderStatus(orderId, ORDER_STATUS.ASSIGNED, courierId);
+    } catch (error) {
+      await session.abortTransaction();
+      console.error('❌ Courier assignment failed, transaction rolled back:', error.message);
+      throw error;
+    } finally {
+      session.endSession();
     }
-    
-    if (order.status !== ORDER_STATUS.READY) {
-      throw new Error('Order must be ready before assigning courier');
-    }
-    
-    order.courier = courierId;
-    await order.save();
-    
-    const Courier = require('../models/Courier');
-    const courier = await Courier.findOne({ user: courierId });
-    
-    if (courier) {
-      await courier.assignOrder(orderId);
-    }
-    
-    return await this.updateOrderStatus(orderId, ORDER_STATUS.ASSIGNED, courierId);
   }
   
   async cancelOrder(orderId, userId, reason) {

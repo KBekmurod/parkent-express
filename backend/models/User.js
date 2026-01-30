@@ -89,6 +89,30 @@ const userSchema = new mongoose.Schema({
       enum: ['telegram', 'web', 'admin'],
       default: 'telegram'
     }
+  },
+  totalOrders: {
+    type: Number,
+    default: 0
+  },
+  lastOrderAt: {
+    type: Date,
+    default: null
+  },
+  activeOrders: {
+    type: Number,
+    default: 0
+  },
+  totalDeliveries: {
+    type: Number,
+    default: 0
+  },
+  todayDeliveries: {
+    type: Number,
+    default: 0
+  },
+  lastDeliveryReset: {
+    type: Date,
+    default: Date.now
   }
 }, {
   timestamps: true,
@@ -130,6 +154,17 @@ userSchema.methods.toSafeObject = function() {
   delete user.password;
   delete user.__v;
   return user;
+};
+
+userSchema.methods.resetDailyStats = function() {
+  const now = new Date();
+  const lastReset = this.lastDeliveryReset || new Date(0);
+  
+  // Check if we need to reset (new day)
+  if (now.toDateString() !== lastReset.toDateString()) {
+    this.todayDeliveries = 0;
+    this.lastDeliveryReset = now;
+  }
 };
 
 userSchema.virtual('fullName').get(function() {

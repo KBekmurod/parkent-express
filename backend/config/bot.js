@@ -13,15 +13,15 @@ if (!token) {
 let bot = null;
 let isInitialized = false;
 
-const initBot = async () => {
-  if (isInitialized && bot) {
-    logger.info('Bot already initialized');
-    return bot;
-  }
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 2000; // 2 seconds base delay
 
+const initBotWithRetry = async (retryCount = 0) => {
   try {
+    logger.info('Initializing Telegram Bot...');
+    
     if (!token) {
-      throw new Error('Telegram bot token is not configured');
+      throw new Error('Telegram bot token is not configured. Check your .env file');
     }
 
     bot = botModule.initializeBot();
@@ -30,15 +30,43 @@ const initBot = async () => {
       throw new Error('Failed to initialize bot');
     }
     
+    // Verify bot is working by getting bot info
     const botInfo = await bot.getMe();
-    logger.info(`Bot initialized: @${botInfo.username}`);
+    logger.info(`✅ Telegram Bot initialized: @${botInfo.username}`);
     
     isInitialized = true;
-    
     return bot;
     
   } catch (error) {
-    logger.error('Error initializing bot:', error);
+    logger.error('❌ Failed to initialize Telegram Bot:', error.message);
+    
+    // Check for invalid token error
+    if (error.message && (error.message.includes('401') || error.message.includes('Unauthorized'))) {
+      throw new Error('Invalid bot token. Check your .env file');
+    }
+    
+    // Retry logic with exponential backoff
+    if (retryCount < MAX_RETRIES) {
+      const delay = RETRY_DELAY * Math.pow(2, retryCount);
+      logger.info(`Retrying Telegram Bot initialization in ${delay/1000}s... (${retryCount + 1}/${MAX_RETRIES})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return initBotWithRetry(retryCount + 1);
+    }
+    
+    throw new Error(`Failed to initialize Telegram Bot after ${MAX_RETRIES} attempts`);
+  }
+};
+
+const initBot = async () => {
+  if (isInitialized && bot) {
+    logger.info('Bot already initialized');
+    return bot;
+  }
+
+  try {
+    return await initBotWithRetry();
+  } catch (error) {
+    logger.error('❌ Bot initialization failed:', error.message);
     isInitialized = false;
     throw error;
   }
