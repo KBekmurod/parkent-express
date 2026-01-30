@@ -71,6 +71,7 @@ describe('SessionManager - New User Registration', () => {
         lastName: userData.lastName,
         username: userData.username,
         role: 'customer',
+        isActive: true,
         phone: `temp_${telegramId}`
       };
       User.create.mockResolvedValue(mockUser);
@@ -91,9 +92,64 @@ describe('SessionManager - New User Registration', () => {
           lastName: userData.lastName,
           username: userData.username,
           role: 'customer',
+          isActive: true,
           phone: `temp_${telegramId}`
         })
       );
+    });
+
+    test('should handle duplicate key error and fetch existing user', async () => {
+      const telegramId = '555666777';
+      const mockUser = {
+        _id: 'existingUser',
+        telegramId: telegramId,
+        firstName: 'Existing',
+        role: 'customer',
+        phone: `temp_${telegramId}`
+      };
+
+      // Mock User.findByTelegramId to return null first (user doesn't exist)
+      User.findByTelegramId.mockResolvedValue(null);
+      
+      // Mock User.create to throw duplicate key error
+      const duplicateKeyError = new Error('Duplicate key');
+      duplicateKeyError.code = 11000;
+      User.create.mockRejectedValue(duplicateKeyError);
+      
+      // Mock User.findOne to return the existing user
+      User.findOne.mockResolvedValue(mockUser);
+      
+      // Mock Session.createSession
+      Session.createSession = jest.fn().mockResolvedValue({ _id: 'session999' });
+
+      const result = await sessionManager.setSession(
+        telegramId,
+        'registration',
+        { firstName: 'Existing' }
+      );
+
+      expect(User.create).toHaveBeenCalled();
+      expect(User.findOne).toHaveBeenCalledWith({ telegramId: telegramId });
+      expect(Session.createSession).toHaveBeenCalledWith(
+        mockUser._id,
+        telegramId,
+        'registration',
+        expect.any(Object),
+        30
+      );
+    });
+
+    test('should throw error for non-registration session when user not found', async () => {
+      const telegramId = '999888777';
+
+      // Mock User.findByTelegramId to return null
+      User.findByTelegramId.mockResolvedValue(null);
+
+      await expect(
+        sessionManager.setSession(telegramId, 'order_creation', {})
+      ).rejects.toThrow('User not found');
+
+      expect(User.create).not.toHaveBeenCalled();
     });
 
     test('should use existing user if found', async () => {

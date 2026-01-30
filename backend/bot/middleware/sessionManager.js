@@ -41,6 +41,7 @@ async function setSession(telegramId, sessionType, initialData = {}, timeoutMinu
           lastName: initialData.lastName || null,
           phone: `temp_${telegramId}`, // Temporary phone until user provides real one
           role: 'customer',
+          isActive: true,
           isVerified: false,
           metadata: {
             registrationSource: 'telegram',
@@ -52,10 +53,18 @@ async function setSession(telegramId, sessionType, initialData = {}, timeoutMinu
           user = await User.create(userData);
           console.log(`✅ Temporary user created for telegramId: ${telegramId}`);
         } catch (createError) {
-          // If user creation fails (e.g., duplicate), try to find the user again
+          // If user creation fails due to duplicate key, fetch the existing user
           if (createError.code === 11000) {
             console.log('Duplicate key error, fetching existing user');
+            // Try to find user by telegramId first
             user = await User.findOne({ telegramId: telegramId });
+            if (!user) {
+              // If not found by telegramId, might be phone collision, still try to find
+              user = await User.findOne({ phone: `temp_${telegramId}` });
+            }
+            if (!user) {
+              throw new Error('Failed to create or find user after duplicate key error');
+            }
           } else {
             throw createError;
           }
