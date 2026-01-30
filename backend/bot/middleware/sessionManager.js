@@ -23,10 +23,49 @@ async function getSession(telegramId) {
 
 async function setSession(telegramId, sessionType, initialData = {}, timeoutMinutes = 30) {
   try {
-    const user = await User.findByTelegramId(telegramId);
+    let user = await User.findByTelegramId(telegramId);
     
+    // If user not found and it's a registration session, create a temporary user
     if (!user) {
-      throw new Error('User not found');
+      console.log(`User not found for telegramId: ${telegramId}`);
+      
+      // For registration sessions, create a temporary user record
+      if (sessionType === 'registration') {
+        console.log('Creating temporary user for registration session');
+        
+        // Extract user data from initialData if available
+        const userData = {
+          telegramId: telegramId,
+          username: initialData.username || null,
+          firstName: initialData.firstName || 'User',
+          lastName: initialData.lastName || null,
+          phone: `temp_${telegramId}`, // Temporary phone until user provides real one
+          role: 'customer',
+          isVerified: false,
+          metadata: {
+            registrationSource: 'telegram',
+            lastActivity: new Date()
+          }
+        };
+        
+        try {
+          user = await User.create(userData);
+          console.log(`✅ Temporary user created for telegramId: ${telegramId}`);
+        } catch (createError) {
+          // If user creation fails (e.g., duplicate), try to find the user again
+          if (createError.code === 11000) {
+            console.log('Duplicate key error, fetching existing user');
+            user = await User.findOne({ telegramId: telegramId });
+          } else {
+            throw createError;
+          }
+        }
+      } else {
+        // For non-registration sessions, user must exist
+        throw new Error('User not found');
+      }
+    } else {
+      console.log(`✅ User loaded for telegramId: ${telegramId}`);
     }
     
     const session = await Session.createSession(
